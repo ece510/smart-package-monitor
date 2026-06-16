@@ -100,7 +100,7 @@ def main():
     try:
         # Run the surveillance script unbuffered (-u) so we can read outputs instantly
         process = subprocess.Popen(
-            ["python3", "-u", "./vision/box_surveillance.py"],
+            ["python3", "-u", "/home/ece510/smart-package-monitor/src/vision/box_surveillance.py"],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,

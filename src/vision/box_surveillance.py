@@ -7,14 +7,14 @@ from skimage.metrics import structural_similarity as ssim
 
 # --- Configuration ---
 CAMERA_INDEX = 0
-CAPTURE_DIR = os.path.expanduser("./surveillance_captures")
+CAPTURE_DIR = os.path.expanduser("/home/ece510/smart-package-monitor/src/vision/surveillance_captures")
 MOVEMENT_THRESHOLD_PX = 30
 SSIM_THRESHOLD = 0.70
 RECOVERY_SSIM_THRESHOLD = 0.60
-ONNX_MODEL = "custom_box_model.onnx"
+ONNX_MODEL = "/home/ece510/smart-package-monitor/src/vision/custom_box_model.onnx"
 INPUT_WIDTH = 640
 INPUT_HEIGHT = 640
-CONF_THRESHOLD = 0.6
+CONF_THRESHOLD = 0.5
 
 os.makedirs(CAPTURE_DIR, exist_ok=True)
 HAS_DISPLAY = os.name != 'posix' or 'DISPLAY' in os.environ
@@ -109,18 +109,20 @@ def main():
         cv2.rectangle(annotated_frame, (x, y), (x + w, y + h), (255, 0, 255), 3)
         cv2.putText(annotated_frame, f"[ID: {idx}] Box", (x, max(y - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 3)
             
-    ref_path = "reference_frame_detected.jpg"
+    ref_path = "./home/ece510/smart-package-monitor/src/vision/reference_frame_detected.jpg"
     cv2.imwrite(ref_path, annotated_frame)
     print(f"Saved picture to '{ref_path}'.")
     
     roi = None
     while True:
-        user_input = input("Enter ID to track (or 'manual'): ").strip().lower()
+        print("Enter ID to track (or 'manual'):")
+        user_input = input().strip().lower()
         if user_input in detected_objects:
             roi = detected_objects[user_input]
             break
         elif user_input == 'manual':
-            coords = input("Enter x y width height: ")
+            print("Enter x y width height: ")
+            coords = input()
             x, y, w, h = map(int, coords.strip().split())
             roi = (x, y, w, h)
             break
