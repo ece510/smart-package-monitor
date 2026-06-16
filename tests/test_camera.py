@@ -104,8 +104,6 @@ def main() -> None:
     print(f"[PASS] Frame captured: {w}×{h} pixels")
     print(f"[PASS] Saved to: {os.path.abspath(filename)}  ({file_size_kb:.1f} KB)")
     print("")
-    print("Transfer the image to your laptop to verify it looks sharp:")
-    print(f"  scp pi@<PI_IP>:{os.path.abspath(filename)} .")
 
 
 if __name__ == "__main__":

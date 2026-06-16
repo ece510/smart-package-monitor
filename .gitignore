@@ -1,11 +1,28 @@
-venv/
+# Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-*.db
-*.sqlite
-captures/
-.vscode/
+
+# Virtual environment
+venv/
 .env
+
+# Captures / generated files
+captures/
+*.jpg
+*.jpeg
+*.png
+
+# Logs
 *.log
+
+# OS / editors
+.DS_Store
+.vscode/
+.idea/
+
+# Secrets / config
+secrets.json
+config.local.json
+*.key
