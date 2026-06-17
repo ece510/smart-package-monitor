@@ -8,13 +8,13 @@ from skimage.metrics import structural_similarity as ssim
 # --- Configuration ---
 CAMERA_INDEX = 0
 CAPTURE_DIR = os.path.expanduser("/home/ece510/smart-package-monitor/src/vision/surveillance_captures")
-MOVEMENT_THRESHOLD_PX = 30
-SSIM_THRESHOLD = 0.70
-RECOVERY_SSIM_THRESHOLD = 0.60
+MOVEMENT_THRESHOLD_PX = 50
+SSIM_THRESHOLD = 0.60 # for camera distortion, lighting changes, etc. We want to be sensitive to damage but not too sensitive to minor changes
+RECOVERY_SSIM_THRESHOLD = 0.65 # Minimum similarity score required to consider a box as the same during recovery
 ONNX_MODEL = "/home/ece510/smart-package-monitor/src/vision/custom_box_model.onnx"
 INPUT_WIDTH = 640
 INPUT_HEIGHT = 640
-CONF_THRESHOLD = 0.5
+CONF_THRESHOLD = 0.5 # Minimum confidence to display a box
 
 os.makedirs(CAPTURE_DIR, exist_ok=True)
 HAS_DISPLAY = os.name != 'posix' or 'DISPLAY' in os.environ
@@ -59,11 +59,13 @@ def format_yolov8_output(output, original_width, original_height):
     indices = cv2.dnn.NMSBoxes(boxes, scores, CONF_THRESHOLD, 0.45)
     
     final_boxes = []
+    final_scores = []
     if len(indices) > 0:
         for i in indices.flatten():
             final_boxes.append(boxes[i])
+            final_scores.append(scores[i])
             
-    return final_boxes
+    return final_boxes, final_scores
 
 def save_snapshot(frame, label):
     ts = time.strftime("%Y%m%d-%H%M%S")
@@ -99,17 +101,17 @@ def main():
     net.setInput(blob)
     preds = net.forward()
     
-    boxes = format_yolov8_output(preds, orig_w, orig_h)
+    boxes, scores = format_yolov8_output(preds, orig_w, orig_h)
     detected_objects = {}
     annotated_frame = frame.copy()
     
-    for idx, box in enumerate(boxes):
+    for idx, (box, score) in enumerate(zip(boxes, scores)):
         x, y, w, h = box
         detected_objects[str(idx)] = (x, y, w, h)
-        cv2.rectangle(annotated_frame, (x, y), (x + w, y + h), (255, 0, 255), 3)
-        cv2.putText(annotated_frame, f"[ID: {idx}] Box", (x, max(y - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 3)
+        cv2.rectangle(annotated_frame, (x, y), (x + w, y + h), (0, 255, 0), 3)
+        cv2.putText(annotated_frame, f"[ID: {idx}] Box ({score:.2f})", (x, max(y - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 3)
             
-    ref_path = "./home/ece510/smart-package-monitor/src/vision/reference_frame_detected.jpg"
+    ref_path = "/home/ece510/smart-package-monitor/src/vision/reference_frame_detected.jpg"
     cv2.imwrite(ref_path, annotated_frame)
     print(f"Saved picture to '{ref_path}'.")
     
@@ -177,7 +179,7 @@ def main():
                     blob = cv2.dnn.blobFromImage(frame, 1/255.0, (INPUT_WIDTH, INPUT_HEIGHT), swapRB=True, crop=False)
                     net.setInput(blob)
                     preds = net.forward()
-                    yolo_boxes = format_yolov8_output(preds, orig_w, orig_h)
+                    yolo_boxes, yolo_scores = format_yolov8_output(preds, orig_w, orig_h)
                     
                     best_match_box = None
                     best_ssim = 0
