@@ -82,14 +82,11 @@ def arduino_thread():
                 last_state = "SENSOR_ALERT"
             time.sleep(0.1)
             
-            with state_lock:
-                if current_state != "ALARM" or not is_running: 
-                    continue
                 
-            ser.write(b'X')
-            ser.write(b'W') # Red OFF (White stays ON)
-            time.sleep(0.5)
-            last_state = "ALARM"
+        # ser.write(b'X')
+        # ser.write(b'W') # Red OFF (White stays ON)
+        # time.sleep(0.5)
+        # last_state = "ALARM"
 
         elif state == "SHUTDOWN":
             if last_state != "SHUTDOWN":
@@ -115,6 +112,7 @@ def main():
     
     try:
         # Run the surveillance script unbuffered (-u) so we can read outputs instantly
+        # Replace the subprocess.Popen call with this — add a timeout
         process = subprocess.Popen(
             ["python3", "-u", "/home/ece510/smart-package-monitor/src/vision/box_surveillance.py"],
             stdout=subprocess.PIPE,
@@ -122,35 +120,42 @@ def main():
             text=True,
             bufsize=1
         )
-        
+
+        # Make stdout non-blocking
+        import fcntl
+        import os
+        fd = process.stdout.fileno()
+        fl = fcntl.fcntl(fd, fcntl.F_GETFL)
+        fcntl.fcntl(fd, fcntl.F_SETFL, fl | os.O_NONBLOCK)
+
         while True:
-            line = process.stdout.readline()
+            # Try to read a line without blocking
+            try:
+                line = process.stdout.readline()
+            except (IOError, OSError):
+                line = ""
+
             if not line and process.poll() is not None:
                 break
-            
+
             if line:
                 line = line.strip()
-                print(f"> {line}") # Echo script output to terminal
-                
-                # Parse output to determine physical state
+                print(f"> {line}")
+
                 if "Starting surveillance loop..." in line:
                     with state_lock:
                         current_state = "NORMAL"
-                        
                 elif "TRIGGER:" in line or "ALARM:" in line:
                     with state_lock:
                         current_state = "ALARM"
-                        
                 elif "Recovery successful!" in line:
                     with state_lock:
                         current_state = "NORMAL"
-                        
                 elif "shutting down system" in line:
                     with state_lock:
                         current_state = "SHUTDOWN"
 
-
-            # Check sensor state (only escalate to SENSOR_ALERT if not already in ALARM/SHUTDOWN)
+            # ← This now runs every iteration regardless of camera output
             with state_lock:
                 cs = current_state
             if cs not in ("ALARM", "SHUTDOWN"):
@@ -158,12 +163,10 @@ def main():
                     with state_lock:
                         current_state = "SENSOR_ALERT"
                 elif cs == "SENSOR_ALERT":
-                    # sensors recovered — go back to NORMAL
                     with state_lock:
                         current_state = "NORMAL"
-                        
-        # Give Arduino thread time to apply the final SHUTDOWN state before exiting
-        time.sleep(3)
+
+            time.sleep(0.1)  # small sleep to avoid busy-spinning
     except KeyboardInterrupt:
         print("[Main] Caught keyboard interrupt. Stopping system...")
     finally:

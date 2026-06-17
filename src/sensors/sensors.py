@@ -31,7 +31,9 @@ MEASURE_DELAY   = 0.08
 
 # ── Alert thresholds ─────────────────────────────────────────────────────────
 # Accelerometer: flag if any axis exceeds ±2.5 g (movement/shock)
-ACCEL_G_LIMIT   = 0.5
+ACCEL_G_LIMIT   = 1.0
+# Add this constant at the top of sensors.py
+ALERT_HOLD_SECONDS = 3.0  # keep alert True for at least this long after trigger
 
 # Temperature: flag outside 0–60 °C
 TEMP_MIN_C      = 0.0
@@ -67,6 +69,7 @@ class SensorMonitor:
         self._running    = False
         self._thread     = None
         self._bus        = None
+        self._alert_until = 0.0   # timestamp until which alert stays True
 
     # ── Public API ───────────────────────────────────────────────────────────
 
@@ -189,7 +192,10 @@ class SensorMonitor:
 
             # -- Update shared state --
             with self._lock:
-                self.sensor_alert  = alert
+                if alert:
+                    self._alert_until = time.time() + ALERT_HOLD_SECONDS
+                # Keep alert True until hold time expires, even if current read is clean
+                self.sensor_alert  = alert or (time.time() < self._alert_until)
                 self.last_readings = readings
 
             time.sleep(POLL_INTERVAL)
