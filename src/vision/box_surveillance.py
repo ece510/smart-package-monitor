@@ -8,13 +8,13 @@ from skimage.metrics import structural_similarity as ssim
 # --- Configuration ---
 CAMERA_INDEX = 0
 CAPTURE_DIR = os.path.expanduser("/home/ece510/smart-package-monitor/src/vision/surveillance_captures")
-MOVEMENT_THRESHOLD_PX = 50
-SSIM_THRESHOLD = 0.60 # for camera distortion, lighting changes, etc. We want to be sensitive to damage but not too sensitive to minor changes
-RECOVERY_SSIM_THRESHOLD = 0.65 # Minimum similarity score required to consider a box as the same during recovery
+MOVEMENT_THRESHOLD_PX = 100
+SSIM_THRESHOLD = 0.70  #similarity respect reference image
+RECOVERY_SSIM_THRESHOLD = 0.65
 ONNX_MODEL = "/home/ece510/smart-package-monitor/src/vision/custom_box_model.onnx"
 INPUT_WIDTH = 640
 INPUT_HEIGHT = 640
-CONF_THRESHOLD = 0.5 # Minimum confidence to display a box
+CONF_THRESHOLD = 0.7 #detects boxes in the scene
 
 os.makedirs(CAPTURE_DIR, exist_ok=True)
 HAS_DISPLAY = os.name != 'posix' or 'DISPLAY' in os.environ
@@ -25,6 +25,16 @@ def calculate_ssim(img1, img2):
     gray2_resized = cv2.resize(gray2, (gray1.shape[1], gray1.shape[0]))
     score, _ = ssim(gray1, gray2_resized, full=True)
     return score
+
+def calculate_color_similarity(img1, img2):
+    hsv1 = cv2.cvtColor(img1, cv2.COLOR_BGR2HSV)
+    hsv2 = cv2.cvtColor(img2, cv2.COLOR_BGR2HSV)
+    hsv2_resized = cv2.resize(hsv2, (hsv1.shape[1], hsv1.shape[0]))
+    hist1 = cv2.calcHist([hsv1], [0, 1], None, [50, 60], [0, 180, 0, 256])
+    hist2 = cv2.calcHist([hsv2_resized], [0, 1], None, [50, 60], [0, 180, 0, 256])
+    cv2.normalize(hist1, hist1, 0, 1, cv2.NORM_MINMAX)
+    cv2.normalize(hist2, hist2, 0, 1, cv2.NORM_MINMAX)
+    return cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL)
 
 def get_center(roi):
     return (roi[0] + roi[2] // 2, roi[1] + roi[3] // 2)
@@ -189,13 +199,19 @@ def main():
                         if y >= 0 and y+h <= orig_h and x >= 0 and x+w <= orig_w:
                             crop = frame[y:y+h, x:x+w]
                             if crop.shape[0] > 0 and crop.shape[1] > 0:
+                                # Structural & Color Check
                                 sim = calculate_ssim(original_reference_crop, crop)
-                                if sim > best_ssim:
-                                    best_ssim = sim
+                                color_sim = calculate_color_similarity(original_reference_crop, crop)
+                                
+                                # Combine scores to ensure it looks similar AND is the exact same color
+                                total_score = (sim * 0.5) + (color_sim * 0.5)
+                                
+                                if total_score > best_ssim:
+                                    best_ssim = total_score
                                     best_match_box = box
                                     
                     if best_match_box and best_ssim >= RECOVERY_SSIM_THRESHOLD:
-                        print(f"Recovery successful! Found a box with SSIM {best_ssim:.2f} compared to original.")
+                        print(f"Recovery successful! Found a box with Combined Score {best_ssim:.2f}")
                         roi = best_match_box
                         try:
                             tracker = cv2.TrackerCSRT.create()

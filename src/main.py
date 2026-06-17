@@ -2,6 +2,8 @@ import sys
 import time
 import threading
 import subprocess
+from sensors.sensors import SensorMonitor
+
 
 try:
     import serial
@@ -12,6 +14,9 @@ except ImportError:
 # Arduino Configuration
 SERIAL_PORT = "/dev/ttyACM0"
 BAUD_RATE = 9600
+
+# Sensor Monitor
+sensor_monitor = SensorMonitor()
 
 # Thread-safe state variables
 state_lock = threading.Lock()
@@ -66,6 +71,16 @@ def arduino_thread():
             ser.write(b'W')
             ser.write(b'R') # Red ON
             time.sleep(0.5)
+
+        # Sensor Alert State
+        elif state == "SENSOR_ALERT":
+            # Solid Yellow ON — sensor out of range
+            if last_state != "SENSOR_ALERT":
+                ser.write(b'X')
+                ser.write(b'W')
+                ser.write(b'Y')   # Yellow ON
+                last_state = "SENSOR_ALERT"
+            time.sleep(0.1)
             
             with state_lock:
                 if current_state != "ALARM" or not is_running: 
@@ -90,7 +105,8 @@ def main():
     print("===========================================")
     print("  Smart Package Monitor - Master Controller")
     print("===========================================")
-    
+    sensor_monitor.start()          # ← add this before t.start()
+
     # Start Arduino background thread
     t = threading.Thread(target=arduino_thread, daemon=True)
     t.start()
@@ -132,6 +148,19 @@ def main():
                 elif "shutting down system" in line:
                     with state_lock:
                         current_state = "SHUTDOWN"
+
+
+            # Check sensor state (only escalate to SENSOR_ALERT if not already in ALARM/SHUTDOWN)
+            with state_lock:
+                cs = current_state
+            if cs not in ("ALARM", "SHUTDOWN"):
+                if sensor_monitor.is_alert():
+                    with state_lock:
+                        current_state = "SENSOR_ALERT"
+                elif cs == "SENSOR_ALERT":
+                    # sensors recovered — go back to NORMAL
+                    with state_lock:
+                        current_state = "NORMAL"
                         
         # Give Arduino thread time to apply the final SHUTDOWN state before exiting
         time.sleep(3)
@@ -140,6 +169,7 @@ def main():
     finally:
         with state_lock:
             is_running = False
+        sensor_monitor.stop() # Stop the sensor monitor
         t.join(timeout=3)
         print("[Main] Exited cleanly.")
 
