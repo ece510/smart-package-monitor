@@ -26,3 +26,5 @@ captures/
 secrets.json
 config.local.json
 *.key
+# Offline SQLite buffer (runtime data, not source)
+*.db

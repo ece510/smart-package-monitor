@@ -31,9 +31,7 @@ MEASURE_DELAY   = 0.08
 
 # ── Alert thresholds ─────────────────────────────────────────────────────────
 # Accelerometer: flag if any axis exceeds ±2.5 g (movement/shock)
-ACCEL_G_LIMIT   = 1.0
-# Add this constant at the top of sensors.py
-ALERT_HOLD_SECONDS = 3.0  # keep alert True for at least this long after trigger
+ACCEL_G_LIMIT   = 0.5
 
 # Temperature: flag outside 0–60 °C
 TEMP_MIN_C      = 0.0
@@ -64,12 +62,12 @@ class SensorMonitor:
 
     def __init__(self):
         self._lock       = threading.Lock()
-        self.sensor_alert = False      # True → main.py should trigger Yellow LED
+        self.sensor_alert = False      # True → out-of-range reading detected
         self.last_readings = {}        # latest sensor values for logging/web
+        self.last_reasons = []         # which thresholds tripped, e.g. ["ACCEL", "TEMP"]
         self._running    = False
         self._thread     = None
         self._bus        = None
-        self._alert_until = 0.0   # timestamp until which alert stays True
 
     # ── Public API ───────────────────────────────────────────────────────────
 
@@ -107,6 +105,13 @@ class SensorMonitor:
         with self._lock:
             return dict(self.last_readings)
 
+    def get_status(self) -> tuple:
+        """Returns (readings_copy, alert, reasons_copy) in one locked read,
+        so callers (e.g. OfflineLogger) don't need to duplicate threshold
+        logic to know *why* an alert fired."""
+        with self._lock:
+            return dict(self.last_readings), self.sensor_alert, list(self.last_reasons)
+
     # ── Initialisation helpers ───────────────────────────────────────────────
 
     def _init_adxl345(self):
@@ -134,6 +139,7 @@ class SensorMonitor:
         while self._running:
             alert = False
             readings = {}
+            reasons = []
 
             # -- ADXL345 read --
             try:
@@ -158,6 +164,7 @@ class SensorMonitor:
                 if abs(x_g) > ACCEL_G_LIMIT or abs(y_g) > ACCEL_G_LIMIT or abs(z_g) > ACCEL_G_LIMIT:
                     print(f"[SensorMonitor] ACCEL ALERT: X={x_g:+.3f} Y={y_g:+.3f} Z={z_g:+.3f} g")
                     alert = True
+                    reasons.append("ACCEL")
 
             except Exception as e:
                 print(f"[SensorMonitor] ADXL345 read error: {e}")
@@ -182,20 +189,20 @@ class SensorMonitor:
                 if not (TEMP_MIN_C <= temp_c <= TEMP_MAX_C):
                     print(f"[SensorMonitor] TEMP ALERT: {temp_c:.2f} °C (limit {TEMP_MIN_C}–{TEMP_MAX_C} °C)")
                     alert = True
+                    reasons.append("TEMP")
 
                 if not (HUM_MIN_PCT <= hum_pct <= HUM_MAX_PCT):
                     print(f"[SensorMonitor] HUMIDITY ALERT: {hum_pct:.2f} % (limit {HUM_MIN_PCT}–{HUM_MAX_PCT} %)")
                     alert = True
+                    reasons.append("HUM")
 
             except Exception as e:
                 print(f"[SensorMonitor] AHT20 read error: {e}")
 
             # -- Update shared state --
             with self._lock:
-                if alert:
-                    self._alert_until = time.time() + ALERT_HOLD_SECONDS
-                # Keep alert True until hold time expires, even if current read is clean
-                self.sensor_alert  = alert or (time.time() < self._alert_until)
+                self.sensor_alert  = alert
                 self.last_readings = readings
+                self.last_reasons  = reasons
 
             time.sleep(POLL_INTERVAL)

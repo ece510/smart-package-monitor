@@ -3,6 +3,10 @@ opencv-python>=4.8.0
 scikit-image>=0.22.0
 Flask>=3.0.0
 flask-socketio>=5.3.6
-pyserial>=3.5
 numpy>=1.26.0
 Pillow>=10.0.0
+
+# Offline store-and-forward (Guillermo)
+# sqlite3 and socket.AF_BLUETOOTH (RFCOMM) are both part of the Python standard
+# library on Linux — no extra package needed. See WIRING.md section 5 for the
+# one-time systemd/sdptool setup that advertises the Bluetooth SPP service.
