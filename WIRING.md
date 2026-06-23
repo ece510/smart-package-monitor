@@ -108,3 +108,38 @@ the firmware.
 
 If every step prints **PASS**, the hardware is correctly wired and teammates can SSH
 in and start developing.
+
+---
+
+## 5. Bluetooth offline store-and-forward (Guillermo)
+
+No extra hardware — this uses the Pi 4's built-in Bluetooth radio (BlueZ), not an
+HC-05/06 module. `src/offline/bt_server.py` listens on **RFCOMM channel 1** and serves
+buffered sensor readings/alerts (`src/offline/store.py`, a local SQLite buffer) to
+whatever nearby device connects, e.g. a phone running a generic "Serial Bluetooth
+Terminal" app.
+
+For a phone to find the service via the standard Serial Port Profile UUID, the Pi must
+advertise an SDP record on channel 1. This is done by the system, not by Python: a
+systemd drop-in makes `bluetoothd` run with `--compat` and re-registers the record on
+every (re)start.
+
+**One-time setup on the Pi** (`/etc/systemd/system/bluetooth.service.d/override.conf`):
+```ini
+[Service]
+ExecStart=
+ExecStart=/usr/libexec/bluetoothd --compat
+ExecStartPost=/bin/sh -c 'sleep 1 && /usr/bin/sdptool add --channel=1 SP'
+```
+Then `sudo systemctl daemon-reload && sudo systemctl restart bluetooth`.
+Also requires `sudo apt install -y libbluetooth-dev` once (for any future native BT
+package builds — not needed by `bt_server.py` itself, which only uses the Python
+stdlib `socket.AF_BLUETOOTH`/`BTPROTO_RFCOMM` API).
+
+**Verify the SDP record:** `sudo sdptool browse local` should list a "Serial Port"
+service on RFCOMM channel 1.
+
+**Bring-up test:** `python3 tests/test_bt_forward.py` (seeds the store with sample
+rows and starts the forwarder). On a phone: pair with the Pi via `bluetoothctl`, open a
+serial Bluetooth terminal app, connect to the Pi's "Serial Port" service, and send
+`STATUS` / `SYNC` / `ALL` / `CLEAR`.

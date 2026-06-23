@@ -3,116 +3,39 @@ import time
 import threading
 import subprocess
 from sensors.sensors import SensorMonitor
+from offline.store import ReadingStore
+from offline.logger import OfflineLogger
+from offline.bt_server import BluetoothForwarder
 
-
-try:
-    import serial
-except ImportError:
-    print("Error: pyserial not installed. Run: pip install pyserial")
-    sys.exit(1)
-
-# Arduino Configuration
-SERIAL_PORT = "/dev/ttyACM0"
-BAUD_RATE = 9600
 
 # Sensor Monitor
 sensor_monitor = SensorMonitor()
 
+# Offline store-and-forward: buffers readings/alerts in SQLite and serves
+# them over Bluetooth (RFCOMM/SPP) to a nearby device when the Pi has no
+# network connection. See src/offline/ for details.
+reading_store = ReadingStore()
+offline_logger = OfflineLogger(sensor_monitor, reading_store)
+bt_forwarder = BluetoothForwarder(reading_store)
+
 # Thread-safe state variables
 state_lock = threading.Lock()
-current_state = "INIT"  # States: INIT, NORMAL, ALARM, SHUTDOWN
+current_state = "INIT"  # States: INIT, NORMAL, ALARM, SENSOR_ALERT, SHUTDOWN
 is_running = True
 
-def arduino_thread():
-    try:
-        ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=2)
-        print(f"[Arduino] Connected to {SERIAL_PORT}")
-        time.sleep(2) # Wait for Arduino to reboot upon serial connection
-    except Exception as e:
-        print(f"[Arduino Error] Could not connect: {e}")
-        return
-
-    # Ensure white LED is ON initially
-    ser.write(b'X')
-    ser.write(b'W')
-
-    last_state = None
-
-    while True:
-        with state_lock:
-            state = current_state
-            running = is_running
-
-        if not running:
-            # Turn everything off before exit
-            ser.write(b'X')
-            ser.write(b'w')
-            ser.close()
-            break
-
-        if state == "INIT":
-            if last_state != "INIT":
-                ser.write(b'X')
-                ser.write(b'W')
-                last_state = "INIT"
-            time.sleep(0.1)
-
-        elif state == "NORMAL":
-            if last_state != "NORMAL":
-                ser.write(b'X')
-                ser.write(b'W')
-                ser.write(b'G') # Green ON
-                last_state = "NORMAL"
-            time.sleep(0.1)
-
-        elif state == "ALARM":
-            # Blinking Red Logic
-            ser.write(b'X')
-            ser.write(b'W')
-            ser.write(b'R') # Red ON
-            time.sleep(0.5)
-
-        # Sensor Alert State
-        elif state == "SENSOR_ALERT":
-            # Solid Yellow ON — sensor out of range
-            if last_state != "SENSOR_ALERT":
-                ser.write(b'X')
-                ser.write(b'W')
-                ser.write(b'Y')   # Yellow ON
-                last_state = "SENSOR_ALERT"
-            time.sleep(0.1)
-            
-            with state_lock:
-                if current_state != "ALARM" or not is_running: 
-                    continue
-                
-            ser.write(b'X')
-            ser.write(b'W') # Red OFF (White stays ON)
-            time.sleep(0.5)
-            last_state = "ALARM"
-
-        elif state == "SHUTDOWN":
-            if last_state != "SHUTDOWN":
-                ser.write(b'X')
-                ser.write(b'W')
-                ser.write(b'R') # Solid Red ON
-                last_state = "SHUTDOWN"
-            time.sleep(0.1)
 
 def main():
     global current_state, is_running
-    
+
     print("===========================================")
     print("  Smart Package Monitor - Master Controller")
     print("===========================================")
-    sensor_monitor.start()          # ← add this before t.start()
-
-    # Start Arduino background thread
-    t = threading.Thread(target=arduino_thread, daemon=True)
-    t.start()
+    sensor_monitor.start()
+    offline_logger.start()
+    bt_forwarder.start()
 
     print("[Main] Launching box_surveillance.py...")
-    
+
     try:
         # Run the surveillance script unbuffered (-u) so we can read outputs instantly
         process = subprocess.Popen(
@@ -122,29 +45,31 @@ def main():
             text=True,
             bufsize=1
         )
-        
+
         while True:
             line = process.stdout.readline()
             if not line and process.poll() is not None:
                 break
-            
+
             if line:
                 line = line.strip()
                 print(f"> {line}") # Echo script output to terminal
-                
-                # Parse output to determine physical state
+
+                # Parse output to determine system state (drives the dashboard)
                 if "Starting surveillance loop..." in line:
                     with state_lock:
                         current_state = "NORMAL"
-                        
+
                 elif "TRIGGER:" in line or "ALARM:" in line:
                     with state_lock:
                         current_state = "ALARM"
-                        
+                    # Record the vision alert so it survives an offline period
+                    reading_store.add_reading({}, is_alert=True, reasons=["CV"])
+
                 elif "Recovery successful!" in line:
                     with state_lock:
                         current_state = "NORMAL"
-                        
+
                 elif "shutting down system" in line:
                     with state_lock:
                         current_state = "SHUTDOWN"
@@ -161,16 +86,15 @@ def main():
                     # sensors recovered — go back to NORMAL
                     with state_lock:
                         current_state = "NORMAL"
-                        
-        # Give Arduino thread time to apply the final SHUTDOWN state before exiting
-        time.sleep(3)
+
     except KeyboardInterrupt:
         print("[Main] Caught keyboard interrupt. Stopping system...")
     finally:
         with state_lock:
             is_running = False
-        sensor_monitor.stop() # Stop the sensor monitor
-        t.join(timeout=3)
+        bt_forwarder.stop()
+        offline_logger.stop()
+        sensor_monitor.stop()
         print("[Main] Exited cleanly.")
 
 if __name__ == "__main__":
