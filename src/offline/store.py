@@ -126,3 +126,13 @@ class ReadingStore:
             cur = self._conn.execute("DELETE FROM readings WHERE synced = 1")
             self._conn.commit()
             return cur.rowcount
+
+    def purge_all(self) -> int:
+        """Deletes every row, synced or not. Used by the BT RESET command to
+        let the app clear its history view, which always reads via ALL
+        (never marks rows as synced) — purge_synced() alone can't reach
+        those rows."""
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM readings")
+            self._conn.commit()
+            return cur.rowcount

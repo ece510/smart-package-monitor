@@ -61,7 +61,7 @@ def main():
     forwarder.start()
 
     print("[bring-up] Pair a phone with this Pi, connect to "
-          "'SmartPackageMonitor-Offline', and send STATUS / SYNC / ALL / CLEAR.")
+          "'SmartPackageMonitor-Offline', and send STATUS / SYNC / ALL / CLEAR / RESET.")
     print("[bring-up] Press Ctrl+C to stop.")
 
     try:

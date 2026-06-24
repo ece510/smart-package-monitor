@@ -74,6 +74,11 @@ def main():
     assert cleared == 2, f"expected 2 purged rows, got {cleared}"
     assert store.stats() == {"total": 1, "pending": 1}
 
+    # -- purge_all deletes everything, synced or not (used by BT RESET) --
+    cleared_all = store.purge_all()
+    assert cleared_all == 1, f"expected 1 purged row, got {cleared_all}"
+    assert store.stats() == {"total": 0, "pending": 0}
+
     store.close()
     os.remove(TEST_DB_PATH)
 
