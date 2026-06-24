@@ -9,12 +9,28 @@ from skimage.metrics import structural_similarity as ssim
 CAMERA_INDEX = 0
 CAPTURE_DIR = os.path.expanduser("/home/ece510/smart-package-monitor/src/vision/surveillance_captures")
 MOVEMENT_THRESHOLD_PX = 100
-SSIM_THRESHOLD = 0.70  #similarity respect reference image
+SSIM_THRESHOLD = 0.55  # similarity respect reference image. Was 0.70, which sat
+# right at the noise floor of grayscale SSIM on a webcam crop (observed firing
+# at SSIM 0.69 with no actual change to box/lighting/motion) — autofocus and
+# white balance are locked below, but auto-exposure is not, so small ambient
+# light shifts alone could drop SSIM under 0.70. If false triggers persist at
+# 0.55, the more robust fix is to also lock auto-exposure (CAP_PROP_AUTO_EXPOSURE
+# / CAP_PROP_EXPOSURE, near the lock calls below) and normalize/blur the crops
+# in calculate_ssim() before comparing, rather than lowering this further.
 RECOVERY_SSIM_THRESHOLD = 0.65
 ONNX_MODEL = "/home/ece510/smart-package-monitor/src/vision/custom_box_model.onnx"
 INPUT_WIDTH = 640
 INPUT_HEIGHT = 640
 CONF_THRESHOLD = 0.7 #detects boxes in the scene
+
+# Saved snapshots (reference frame + incident captures) are downscaled and
+# re-encoded at a lower JPEG quality before being written to disk. These are
+# only ever viewed by the client app over a slow Bluetooth SPP link, so
+# full-resolution frames are wasted bytes — this keeps each file well under
+# 100 KB instead of ~200+ KB, without touching the full-res frame used for
+# on-device detection/SSIM.
+CAPTURE_MAX_WIDTH = 960
+CAPTURE_JPEG_QUALITY = 70
 
 os.makedirs(CAPTURE_DIR, exist_ok=True)
 HAS_DISPLAY = os.name != 'posix' or 'DISPLAY' in os.environ
@@ -77,10 +93,22 @@ def format_yolov8_output(output, original_width, original_height):
             
     return final_boxes, final_scores
 
+def downscale_for_export(frame):
+    """Shrinks a frame to CAPTURE_MAX_WIDTH (if wider) for saving to disk.
+    Only used right before cv2.imwrite — detection/SSIM always run on the
+    original full-resolution frame."""
+    h, w = frame.shape[:2]
+    if w <= CAPTURE_MAX_WIDTH:
+        return frame
+    scale = CAPTURE_MAX_WIDTH / w
+    new_size = (CAPTURE_MAX_WIDTH, int(h * scale))
+    return cv2.resize(frame, new_size, interpolation=cv2.INTER_AREA)
+
+
 def save_snapshot(frame, label):
     ts = time.strftime("%Y%m%d-%H%M%S")
     filepath = os.path.join(CAPTURE_DIR, f"capture_{label}_{ts}.jpg")
-    cv2.imwrite(filepath, frame)
+    cv2.imwrite(filepath, downscale_for_export(frame), [int(cv2.IMWRITE_JPEG_QUALITY), CAPTURE_JPEG_QUALITY])
     print(f"[{time.strftime('%H:%M:%S')}] Saved picture: {filepath}")
 
 def main():
@@ -132,7 +160,7 @@ def main():
         cv2.putText(annotated_frame, f"[ID: {idx}] Box ({score:.2f})", (x, max(y - 10, 15)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 3)
             
     ref_path = "/home/ece510/smart-package-monitor/src/vision/reference_frame_detected.jpg"
-    cv2.imwrite(ref_path, annotated_frame)
+    cv2.imwrite(ref_path, downscale_for_export(annotated_frame), [int(cv2.IMWRITE_JPEG_QUALITY), CAPTURE_JPEG_QUALITY])
     print(f"Saved picture to '{ref_path}'.")
     
     roi = None

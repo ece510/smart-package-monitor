@@ -36,20 +36,43 @@ Line protocol (newline-terminated ASCII/JSON, one command per line):
                then the most recent incident's captures), then
                {"done": N}.
     PHOTO <name> -> the named photo's bytes, base64-encoded on one line,
-               framed as {"photo": name, "size": N, "encoding": "base64"}
-               then the base64 line then {"done": 1}; or a single
-               {"error": ...} line (no trailer) if name isn't recognized.
+               framed as {"photo": name, "size": N, "encoding": "base64",
+               "kind": ..., "label": ...} then the base64 line then
+               {"done": 1}; or a single {"error": ...} line (no trailer)
+               if name isn't recognized.
+    ALLPHOTOS -> every available photo, back to back: for each, the same
+               header+base64 framing PHOTO uses (no per-photo {"done"}),
+               followed by one final {"done": N} once all have been sent.
+               Lets the client fetch the whole set over a single RFCOMM
+               connection instead of reconnecting per photo.
 """
 
 import base64
+import io
 import json
 import os
 import socket
 import threading
 
+try:
+    from PIL import Image
+    _HAS_PILLOW = True
+except ImportError:
+    _HAS_PILLOW = False
+
+# Photos are only ever viewed by the client app over a slow Bluetooth SPP
+# link, so there's no reason to ship full-resolution camera JPEGs (these can
+# run several MB each — observed at ~37 MB total for one incident's worth of
+# captures, which is minutes over RFCOMM). Re-encode at send time rather than
+# relying on capture-time downscaling, so this also shrinks photos that were
+# already saved at full resolution before this fix existed.
+SEND_MAX_WIDTH = 960
+SEND_JPEG_QUALITY = 70
+_warned_no_pillow = False
+
 RFCOMM_CHANNEL = 1  # must match the channel sdptool advertises (see WIRING.md)
 
-BANNER = "SPM-BT ready | commands: STATUS, SYNC, ALL, CLEAR, RESET, PHOTOS, PHOTO"
+BANNER = "SPM-BT ready | commands: STATUS, SYNC, ALL, CLEAR, RESET, PHOTOS, PHOTO, ALLPHOTOS"
 
 # These two paths MUST stay in sync with src/vision/box_surveillance.py
 # (CAPTURE_DIR and the reference frame path in main()). Duplicated here
@@ -128,6 +151,37 @@ def _label_from_capture_name(fname: str) -> str:
         if fname.startswith(f"capture_{label}_"):
             return label
     return ""
+
+
+def _compressed_photo_bytes(path: str) -> bytes:
+    """Re-encodes the photo at `path` as a downscaled, lower-quality JPEG for
+    transfer over Bluetooth, regardless of how it was originally saved. Falls
+    back to the raw file bytes (and prints a one-time warning) if Pillow
+    isn't installed or re-encoding fails for any reason — a slow transfer is
+    better than a broken one."""
+    global _warned_no_pillow
+    if not _HAS_PILLOW:
+        if not _warned_no_pillow:
+            print("[BluetoothForwarder] Pillow not installed — sending photos "
+                  "at full size. Run: pip3 install Pillow")
+            _warned_no_pillow = True
+        with open(path, "rb") as f:
+            return f.read()
+
+    try:
+        with Image.open(path) as img:
+            img = img.convert("RGB")
+            if img.width > SEND_MAX_WIDTH:
+                new_height = round(img.height * SEND_MAX_WIDTH / img.width)
+                img = img.resize((SEND_MAX_WIDTH, new_height), Image.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=SEND_JPEG_QUALITY)
+            return buf.getvalue()
+    except Exception as e:
+        print(f"[BluetoothForwarder] Could not re-encode '{path}' ({e}); "
+              "sending original bytes.")
+        with open(path, "rb") as f:
+            return f.read()
 
 
 def _resolve_photo_path(name: str):
@@ -223,6 +277,7 @@ class BluetoothForwarder:
         # Only the verb is case-insensitive — PHOTO's filename argument must
         # keep its original case to match the on-disk filename exactly.
         verb = command.split(" ", 1)[0].upper()
+        print(f"[BluetoothForwarder] Command: {command}")
 
         if verb == "STATUS":
             client_sock.send((json.dumps(self._store.stats()) + "\n").encode("utf-8"))
@@ -258,6 +313,19 @@ class BluetoothForwarder:
             requested = command[len("PHOTO "):].strip()
             self._send_photo(client_sock, requested)
 
+        elif verb == "ALLPHOTOS":
+            meta = _list_photo_meta()
+            sent = 0
+            total_bytes = 0
+            for m in meta:
+                photo_bytes = self._write_one_photo(client_sock, m["name"])
+                if photo_bytes is not None:
+                    sent += 1
+                    total_bytes += photo_bytes
+            client_sock.send((json.dumps({"done": sent}) + "\n").encode("utf-8"))
+            print(f"[BluetoothForwarder] ALLPHOTOS: sent {sent} photos, "
+                  f"{total_bytes} bytes")
+
         else:
             client_sock.send((json.dumps({"error": f"unknown command '{command}'"}) + "\n")
                               .encode("utf-8"))
@@ -269,16 +337,44 @@ class BluetoothForwarder:
                 (json.dumps({"error": f"unknown photo '{name}'"}) + "\n").encode("utf-8")
             )
             return
-        try:
-            with open(path, "rb") as f:
-                raw = f.read()
-        except OSError as e:
+        if self._write_photo_frames(client_sock, name, path) is None:
             client_sock.send(
-                (json.dumps({"error": f"could not read '{name}': {e}"}) + "\n").encode("utf-8")
+                (json.dumps({"error": f"could not read '{name}'"}) + "\n").encode("utf-8")
             )
             return
+        client_sock.send((json.dumps({"done": 1}) + "\n").encode("utf-8"))
 
-        header = {"photo": name, "size": len(raw), "encoding": "base64"}
+    def _write_one_photo(self, client_sock, name: str):
+        """Used by ALLPHOTOS: writes one photo's header+base64 frames (no
+        per-photo {"done"} trailer — the caller sends one trailer for the
+        whole batch). Returns None (and sends nothing for this photo) if
+        the name can't be resolved or the file can't be read, so one
+        missing/raced file doesn't abort the rest of the batch. Otherwise
+        returns the number of bytes sent for this photo."""
+        path = _resolve_photo_path(name)
+        if path is None:
+            return None
+        return self._write_photo_frames(client_sock, name, path)
+
+    def _write_photo_frames(self, client_sock, name: str, path: str):
+        """Sends a photo's header line + base64 payload line (no trailer).
+        Shared by PHOTO (which appends its own {"done": 1}) and ALLPHOTOS
+        (which appends one {"done": N} after the whole batch). Returns the
+        number of (compressed) bytes sent, or None if the file couldn't be
+        read."""
+        try:
+            raw = _compressed_photo_bytes(path)
+        except OSError:
+            return None
+
+        meta = next((m for m in _list_photo_meta() if m["name"] == name), None)
+        header = {
+            "photo": name,
+            "size": len(raw),
+            "encoding": "base64",
+            "kind": meta["kind"] if meta else None,
+            "label": meta.get("label") if meta else None,
+        }
         client_sock.send((json.dumps(header) + "\n").encode("utf-8"))
         client_sock.send((base64.b64encode(raw).decode("ascii") + "\n").encode("utf-8"))
-        client_sock.send((json.dumps({"done": 1}) + "\n").encode("utf-8"))
+        return len(raw)

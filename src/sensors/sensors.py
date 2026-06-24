@@ -37,9 +37,9 @@ MEASURE_DELAY   = 0.08
 # threshold stay in sync.
 ACCEL_NET_G_LIMIT = 0.3
 
-# Temperature: flag outside 0–60 °C
+# Temperature: flag outside 0–30 °C
 TEMP_MIN_C      = 0.0
-TEMP_MAX_C      = 60.0
+TEMP_MAX_C      = 30.0
 
 # Humidity: flag outside 0–100 % (also catches sensor errors)
 HUM_MIN_PCT     = 0.0
