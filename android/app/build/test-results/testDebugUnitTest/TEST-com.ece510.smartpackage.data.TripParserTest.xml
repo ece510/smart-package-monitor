@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.ece510.smartpackage.data.TripParserTest" tests="7" skipped="0" failures="0" errors="0" timestamp="2026-06-24T11:35:12" hostname="SIDEB" time="0.037">
+  <properties/>
+  <testcase name="isDoneLine recognizes only the trailer" classname="com.ece510.smartpackage.data.TripParserTest" time="0.019"/>
+  <testcase name="normal reading has all sensor fields and no alert" classname="com.ece510.smartpackage.data.TripParserTest" time="0.006"/>
+  <testcase name="parses a full ALL response into three readings, skipping banner and trailer" classname="com.ece510.smartpackage.data.TripParserTest" time="0.006"/>
+  <testcase name="combined alert reasons split correctly" classname="com.ece510.smartpackage.data.TripParserTest" time="0.003"/>
+  <testcase name="CV alert has no sensor values but is flagged as an alert" classname="com.ece510.smartpackage.data.TripParserTest" time="0.0"/>
+  <testcase name="empty response (no rows) parses to an empty list" classname="com.ece510.smartpackage.data.TripParserTest" time="0.0"/>
+  <testcase name="malformed and unrelated lines are skipped without throwing" classname="com.ece510.smartpackage.data.TripParserTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
