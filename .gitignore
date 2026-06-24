@@ -28,3 +28,12 @@ config.local.json
 *.key
 # Offline SQLite buffer (runtime data, not source)
 *.db
+# Android (Trip History app) — build artifacts and machine-specific config
+android/local.properties
+android/.gradle/
+android/app/build/
+android/build/
+android/.idea/
+android/*.iml
+android/app/*.iml
+EOF
