@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="app_name">Trip History</string>
-    <style name="Theme.SmartPackageTripHistory" parent="android:Theme.Material.Light.NoActionBar"/>
-</resources>
