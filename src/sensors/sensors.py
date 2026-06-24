@@ -30,8 +30,12 @@ STATUS_CALIB    = 0x08
 MEASURE_DELAY   = 0.08
 
 # ── Alert thresholds ─────────────────────────────────────────────────────────
-# Accelerometer: flag if any axis exceeds ±2.5 g (movement/shock)
-ACCEL_G_LIMIT   = 0.5
+# Accelerometer: flag a shock when net acceleration (gravity removed)
+# exceeds this. At rest the magnitude is ~1 g, so we subtract it:
+# net = |sqrt(x^2 + y^2 + z^2) - 1.0|. Matches the Android app's logic
+# (TripSummary.kt netAcceleration) so the Pi's verdict and the app's chart
+# threshold stay in sync.
+ACCEL_NET_G_LIMIT = 0.3
 
 # Temperature: flag outside 0–60 °C
 TEMP_MIN_C      = 0.0
@@ -159,10 +163,11 @@ class SensorMonitor:
                 readings["accel_y_g"] = round(y_g, 3)
                 readings["accel_z_g"] = round(z_g, 3)
 
-                print(f"[ACCEL] X={x_g:+.3f}g  Y={y_g:+.3f}g  Z={z_g:+.3f}g")
+                net_accel_g = abs((x_g**2 + y_g**2 + z_g**2) ** 0.5 - 1.0)
+                print(f"[ACCEL] X={x_g:+.3f}g  Y={y_g:+.3f}g  Z={z_g:+.3f}g  net={net_accel_g:.3f}g")
 
-                if abs(x_g) > ACCEL_G_LIMIT or abs(y_g) > ACCEL_G_LIMIT or abs(z_g) > ACCEL_G_LIMIT:
-                    print(f"[SensorMonitor] ACCEL ALERT: X={x_g:+.3f} Y={y_g:+.3f} Z={z_g:+.3f} g")
+                if net_accel_g > ACCEL_NET_G_LIMIT:
+                    print(f"[SensorMonitor] ACCEL ALERT: net={net_accel_g:.3f} g (limit {ACCEL_NET_G_LIMIT})")
                     alert = True
                     reasons.append("ACCEL")
 
@@ -185,6 +190,8 @@ class SensorMonitor:
 
                 readings["temp_c"]  = round(temp_c, 2)
                 readings["hum_pct"] = round(hum_pct, 2)
+
+                print(f"[ENV] Temp={temp_c:.2f}°C  Hum={hum_pct:.2f}%")
 
                 if not (TEMP_MIN_C <= temp_c <= TEMP_MAX_C):
                     print(f"[SensorMonitor] TEMP ALERT: {temp_c:.2f} °C (limit {TEMP_MIN_C}–{TEMP_MAX_C} °C)")

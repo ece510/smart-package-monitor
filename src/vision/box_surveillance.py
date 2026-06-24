@@ -95,7 +95,17 @@ def main():
     cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_V4L2)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-    
+
+    # Best-effort: lock auto-adjustments so camera self-tuning doesn't masquerade
+    # as "damage" via SSIM noise. V4L2 property semantics are driver-dependent
+    # (UVC webcams vary) — this is a defense-in-depth complement to the frame
+    # debounce below, not the primary fix, so failures here are non-fatal.
+    try:
+        cap.set(cv2.CAP_PROP_AUTOFOCUS, 0)
+        cap.set(cv2.CAP_PROP_AUTO_WB, 0)
+    except Exception as e:
+        print(f"[box_surveillance] Could not lock camera auto-adjustments: {e}")
+
     if not cap.isOpened():
         print("Error: Could not open camera.")
         return
@@ -157,6 +167,8 @@ def main():
     alarm_state = False
     alarm_start_time = 0
     pics_taken = 0
+    low_similarity_streak = 0   # consecutive frames below SSIM_THRESHOLD
+    DAMAGE_CONFIRM_FRAMES = 3   # frames required before a damage trigger fires
     
     print("\nStarting surveillance loop...")
     if not HAS_DISPLAY:
@@ -223,6 +235,7 @@ def main():
                         reference_crop = frame[int(roi[1]):int(roi[1]+roi[3]), int(roi[0]):int(roi[0]+roi[2])].copy()
                         initial_center = get_center(roi)
                         alarm_state = False
+                        low_similarity_streak = 0
                         print("Resuming normal surveillance with new reference.")
                     else:
                         print(f"Recovery failed. Best box had SSIM {best_ssim:.2f} (Required: {RECOVERY_SSIM_THRESHOLD}).")
@@ -253,7 +266,11 @@ def main():
                             similarity = calculate_ssim(reference_crop, current_crop)
                             cv2.putText(display_frame, f"SSIM: {similarity:.2f}", (x, y + h + 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
                             if similarity < SSIM_THRESHOLD:
-                                trigger_reason = f"Damage Detected (SSIM: {similarity:.2f})"
+                                low_similarity_streak += 1
+                                if low_similarity_streak >= DAMAGE_CONFIRM_FRAMES:
+                                    trigger_reason = f"Damage Detected (SSIM: {similarity:.2f})"
+                            else:
+                                low_similarity_streak = 0
                 else:
                     trigger_reason = "Box Lost!"
                     

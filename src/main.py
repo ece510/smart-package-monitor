@@ -46,34 +46,57 @@ def main():
             bufsize=1
         )
 
+        # Whether box_surveillance.py is still running. Once it exits (box
+        # dropped/lost and unrecovered, or stopped), we no longer have a
+        # vision feed — but sensors + Bluetooth must keep serving the trip,
+        # since the most important moment (the drop) just happened and the
+        # phone still needs to connect and download it. Only a real
+        # KeyboardInterrupt should stop the whole monitor now.
+        vision_alive = True
+        cv_alert_recorded = False  # avoids logging a duplicate CV alert below
+
         while True:
-            line = process.stdout.readline()
-            if not line and process.poll() is not None:
-                break
-
-            if line:
-                line = line.strip()
-                print(f"> {line}") # Echo script output to terminal
-
-                # Parse output to determine system state (drives the dashboard)
-                if "Starting surveillance loop..." in line:
-                    with state_lock:
-                        current_state = "NORMAL"
-
-                elif "TRIGGER:" in line or "ALARM:" in line:
-                    with state_lock:
-                        current_state = "ALARM"
-                    # Record the vision alert so it survives an offline period
-                    reading_store.add_reading({}, is_alert=True, reasons=["CV"])
-
-                elif "Recovery successful!" in line:
-                    with state_lock:
-                        current_state = "NORMAL"
-
-                elif "shutting down system" in line:
+            if vision_alive:
+                line = process.stdout.readline()
+                if not line and process.poll() is not None:
+                    vision_alive = False
+                    print("[Main] Vision watcher ended (box dropped/lost or stopped). "
+                          "Sensors + Bluetooth stay up so the trip can still be downloaded.")
                     with state_lock:
                         current_state = "SHUTDOWN"
+                    continue
 
+                if line:
+                    line = line.strip()
+                    print(f"> {line}") # Echo script output to terminal
+
+                    # Parse output to determine system state (drives the dashboard)
+                    if "Starting surveillance loop..." in line:
+                        with state_lock:
+                            current_state = "NORMAL"
+
+                    elif "TRIGGER:" in line or "ALARM:" in line:
+                        with state_lock:
+                            current_state = "ALARM"
+                        # Record the vision alert so it survives an offline period
+                        reading_store.add_reading({}, is_alert=True, reasons=["CV"])
+                        cv_alert_recorded = True
+
+                    elif "Recovery successful!" in line:
+                        with state_lock:
+                            current_state = "NORMAL"
+
+                    elif "shutting down system" in line:
+                        with state_lock:
+                            current_state = "SHUTDOWN"
+                        # Defensive fallback: make sure the drop that caused
+                        # the shutdown is on record even if no TRIGGER/ALARM
+                        # line was seen first.
+                        if not cv_alert_recorded:
+                            reading_store.add_reading({}, is_alert=True, reasons=["CV"])
+                            cv_alert_recorded = True
+            else:
+                time.sleep(1.0)  # vision has ended; sensors + BT keep running
 
             # Check sensor state (only escalate to SENSOR_ALERT if not already in ALARM/SHUTDOWN)
             with state_lock:

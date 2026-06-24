@@ -61,6 +61,7 @@ fun HistoryScreen(
 
         LazyColumn(modifier = Modifier.fillMaxWidth()) {
             item { SummaryCards(summary) }
+            item { TripCharts(summary.series) }
             item {
                 Text(
                     "Eventos detectados (${summary.alertEvents.size})",

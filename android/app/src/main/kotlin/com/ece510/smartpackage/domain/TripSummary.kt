@@ -15,6 +15,24 @@ data class AlertEvent(
 )
 
 /**
+ * One reading's worth of chart data, in trip order. Used by TripCharts.kt to
+ * plot net acceleration / temperature / humidity over the trip — null fields
+ * mean that reading didn't carry that sensor (e.g. a CV-only alert).
+ */
+data class TripPoint(
+    val index: Int, // position in the ordered trip, used as the chart's X axis
+    val ts: String,
+    val netAccelG: Double?,
+    val tempC: Double?,
+    val humPct: Double?,
+    val isAlert: Boolean,
+)
+
+/** Shock threshold in g, shared with the Pi's sensors.py ACCEL_NET_G_LIMIT so
+ *  the chart's reference line matches what actually triggers an alert. */
+const val NET_ACCEL_THRESHOLD_G = 0.3
+
+/**
  * Descriptive statistics over a full trip's worth of [Reading]s. This is
  * pure Kotlin (no Android dependency) so it's unit-testable on the JVM —
  * see the design doc point 7: it never recomputes alerts, it only
@@ -34,6 +52,7 @@ data class TripSummary(
     val maxNetAccelG: Double?, // max of |sqrt(x^2+y^2+z^2) - 1.0| across readings
     val tripDuration: Duration?,
     val alertEvents: List<AlertEvent>,
+    val series: List<TripPoint>,
 )
 
 object TripSummaryCalculator {
@@ -51,6 +70,7 @@ object TripSummaryCalculator {
                 maxNetAccelG = null,
                 tripDuration = null,
                 alertEvents = emptyList(),
+                series = emptyList(),
             )
         }
 
@@ -82,6 +102,16 @@ object TripSummaryCalculator {
             maxNetAccelG = netAccels.maxOrNull(),
             tripDuration = tripDuration(ordered),
             alertEvents = alertRows.map { AlertEvent(it.ts, it.alertReasons) },
+            series = ordered.mapIndexed { i, r ->
+                TripPoint(
+                    index = i,
+                    ts = r.ts,
+                    netAccelG = netAcceleration(r),
+                    tempC = r.tempC,
+                    humPct = r.humPct,
+                    isAlert = r.isAlert,
+                )
+            },
         )
     }
 
